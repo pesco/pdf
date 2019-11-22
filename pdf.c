@@ -9,6 +9,7 @@
 #define SEQ(...)	h_sequence(__VA_ARGS__, NULL)
 #define CHX(...)	h_choice(__VA_ARGS__, NULL)
 #define REP(P,N)	h_repeat_n(P, N)
+#define IGN(P)		h_ignore(P)
 #define IN(STR)		h_in(STR, sizeof(STR))
 #define NOT_IN(STR)	h_not_in(STR, sizeof(STR))
 
@@ -26,6 +27,7 @@ mapch(uint8_t c, uint8_t v)
 {
 	return h_action(h_ch(c), act_mapch, (void *)(uintptr_t)v);
 }
+
 
 /*
  * semantic actions
@@ -54,6 +56,21 @@ act_hupper(const HParseResult *p, void *u)
 HParsedToken *
 act_nat(const HParseResult *p, void *u)
 {
+	uint64_t x = 0;
+	HCountedArray *seq = H_CAST_SEQ(p->ast);
+
+	for (size_t i = 0; i < seq->used; i++)
+		x = x*10 + H_CAST_UINT(seq->elements[i]);
+
+	return H_MAKE_UINT(x);
+}
+#define act_xrnat act_nat
+#define act_xroff act_nat
+#define act_xrgen act_nat
+
+HParsedToken *
+act_pnat(const HParseResult *p, void *u)
+{
 	uint64_t x = H_FIELD_UINT(0);
 	HCountedArray *seq = H_FIELD_SEQ(1);
 
@@ -62,7 +79,6 @@ act_nat(const HParseResult *p, void *u)
 	
 	return H_MAKE_UINT(x);
 }
-#define act_pnat act_nat
 
 HParsedToken *
 act_intg(const HParseResult *p, void *u)
@@ -138,7 +154,14 @@ act_octal(const HParseResult *p, void *u)
 }
 
 #define act_stream act_token
+#define act_xrefs h_act_last
 
+
+/*
+ * input grammar
+ */
+
+/* continuation for h_bind() */
 HParser *kstream(HAllocator *, const HParsedToken *, void *);
 
 HParser *
@@ -168,8 +191,10 @@ pdf_parser(void)
 	H_ARULE(hupper,	h_ch_range('A', 'F'));
 	H_RULE(hdigit,	CHX(digit, hlower, hupper));
 	H_ARULE(odigit,	h_ch_range('0', '7'));
-
 	H_RULE(sign,	IN("+-"));
+
+	H_RULE(sp,	h_ch(' '));
+	H_RULE(percent,	h_ch('%'));
 	H_RULE(period,	h_ch('.'));
 	H_RULE(slash,	h_ch('/'));
 	H_RULE(hash,	h_ch('#'));
@@ -178,17 +203,18 @@ pdf_parser(void)
 	H_RULE(rparen,	h_ch(')'));
 
 	/* whitespace */
-	H_RULE(comment,	h_right(h_ch('%'), line));
+	H_RULE(comment,	h_right(percent, line));
 	H_RULE(ws,	h_many(CHX(wchar, comment)));
 
 #define TOK(X)	h_right(ws, X)
-#define KW(S)	TOK(h_ignore(h_literal(S)))
+#define KW(S)	TOK(IGN(h_literal(S)))
 // XXX this allows, for instance, "<<<<" to be parsed as "<< <<". ok?
+// XXX this allows, for instance, "endstreamendobj".
 
 	/* misc */
 	H_RULE(epsilon,	h_epsilon_p());
 	H_RULE(empty,	SEQ(epsilon));
-	H_ARULE(nat,	TOK(SEQ(digit,  h_many(digit))));
+	H_ARULE(nat,	TOK(h_many1(digit)));
 	H_ARULE(pnat,	TOK(SEQ(pdigit, h_many(digit))));
 
 #define OPT(X)	CHX(X, epsilon)
@@ -223,7 +249,7 @@ pdf_parser(void)
 	H_RULE(bsf,	mapch('f', 0x0c));	/* FF */
 	H_RULE(escape,	CHX(bsn, bsr, bst, bsb, bsf, lparen, rparen, bslash));
 	H_ARULE(octal,	CHX(REP(odigit,3), REP(odigit,2), REP(odigit,1)));
-	H_RULE(wrap,	h_ignore(eol));
+	H_RULE(wrap,	IGN(eol));
 	H_RULE(sesc,	h_right(bslash, CHX(escape, octal, wrap, epsilon)));
 						/* NB: a lone '\' is ignored */
 	H_ARULE(schars,	h_many(CHX(schar, snest, sesc, eol)));
@@ -254,15 +280,29 @@ pdf_parser(void)
 	 * file structure
 	 */
 
-	H_RULE(version,	SEQ(pdigit, h_ignore(h_ch('.')), pdigit));
+	/* header */
+	H_RULE(version,	SEQ(pdigit, IGN(period), pdigit));
 	H_RULE(header,	SEQ(h_literal("%PDF-"), version, eol));
 
+	/* body */
 	H_RULE(indobj,	CHX(stream, obj));
 	H_RULE(objdef,	SEQ(pnat, nat, KW("obj"), indobj, KW("endobj")));
 	H_RULE(body,	h_many(objdef));	// XXX object streams
 
-	H_RULE(xrefs,	epsilon);
+	/* cross-reference table */
+	H_RULE(xreol,	CHX(SEQ(sp, cr), SEQ(sp, lf), crlf));
+		// ^ XXX does the real world follow this rule?! cf. loop.pdf
+	H_RULE(xrtyp,	CHX(h_ch('n'), h_ch('f')));
+	H_ARULE(xroff,	REP(digit, 10));
+	H_ARULE(xrgen,	REP(digit, 5));
+	H_RULE(xrent,	SEQ(xroff, IGN(sp), xrgen, IGN(sp), xrtyp, IGN(xreol)));
+	H_ARULE(xrnat,	h_many1(digit));
+	H_RULE(xrhead,	SEQ(xrnat, IGN(sp), xrnat, IGN(eol)));
+	H_RULE(xrsub,	SEQ(xrhead, h_many(xrent)));
+	H_ARULE(xrefs,	SEQ(KW("xref"), eol, h_many(xrsub)));
+		// XXX whitespace allowed between "xref" and eol?
 
+	/* trailer */
 	H_RULE(trailer,	epsilon);
 
 	H_RULE(end,	epsilon);	// XXX
@@ -309,6 +349,10 @@ fail:
 	return h_nothing_p__m(mm__);
 }
 
+
+/*
+ * minimal main program
+ */
 
 #include <stdio.h>
 #include <err.h>
