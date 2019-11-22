@@ -171,8 +171,8 @@ pdf_parser(void)
 	/* arrays and dictionaries */
 	H_RULE(obj,	h_indirect());
 	H_RULE(k_v,	SEQ(name, obj));
-	H_RULE(dict,	SEQ(KW("<<"), h_many(k_v), KW(">>")));
-	H_RULE(array,	SEQ(KW("["), h_many(obj), KW("]")));
+	H_RULE(dict,	h_middle(KW("<<"), h_many(k_v), KW(">>")));
+	H_RULE(array,	h_middle(KW("["), h_many(obj), KW("]")));
 
 	/* streams */
 	H_RULE(stream,	h_nothing_p());	// XXX
