@@ -116,7 +116,7 @@ pdf_parser(void)
 	H_RULE(line,	h_many(h_not_in("\r\n", 2)));
 
 	/* character classes */
-#define WCHARS "\t\n\f\r "
+#define WCHARS "\0\t\n\f\r "
 #define DCHARS "()<>[]{}/%"
 	H_RULE(wchar,	IN(WCHARS));			/* white-space */
 	//XXX H_RULE(dchar,	IN(DCHARS));			/* delimiter */
