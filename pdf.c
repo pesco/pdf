@@ -6,10 +6,28 @@
 /* convenience macros */
 #define SEQ(...)	h_sequence(__VA_ARGS__, NULL)
 #define CHX(...)	h_choice(__VA_ARGS__, NULL)
+#define REP(P,N)	h_repeat_n(P, N)
 #define IN(STR)		h_in(STR, sizeof(STR))
 #define NOT_IN(STR)	h_not_in(STR, sizeof(STR))
 
-#include <assert.h>
+
+/* a combinator to parse a given character but return a different value */
+
+HParsedToken *
+act_mapch(const HParseResult *p, void *u)
+{
+	return H_MAKE_UINT((uint8_t)u);
+}
+
+HParser *
+mapch(uint8_t c, uint8_t v)
+{
+	return h_action(h_ch(c), act_mapch, (void *)(uintptr_t)v);
+}
+
+/*
+ * semantic actions
+ */
 
 HParsedToken *
 act_digit(const HParseResult *p, void *u)
@@ -17,6 +35,7 @@ act_digit(const HParseResult *p, void *u)
 	return H_MAKE_UINT(H_CAST_UINT(p->ast) - '0');
 }
 #define act_pdigit act_digit
+#define act_odigit act_digit
 
 HParsedToken *
 act_hlower(const HParseResult *p, void *u)
@@ -101,6 +120,20 @@ act_nesc(const HParseResult *p, void *u)
 	return H_MAKE_UINT(H_FIELD_UINT(1)*16 + H_FIELD_UINT(2));
 }
 
+#define act_schars h_act_flatten
+#define act_litstr act_token
+
+HParsedToken *
+act_octal(const HParseResult *p, void *u)
+{
+	uint64_t x = 0;
+	HCountedArray *seq = H_CAST_SEQ(p->ast);
+
+	for (size_t i = 0; i < seq->used; i++)
+		x = x*8 + H_CAST_UINT(seq->elements[i]);
+
+	return H_MAKE_UINT(x);
+}
 
 HParser *
 pdf_parser(void)
@@ -109,11 +142,11 @@ pdf_parser(void)
 	if(p) return p;
 
 	/* lines */
-	H_RULE(crlf,	h_literal("\r\n"));
-	H_RULE(cr,	h_ch('\r'));
-	H_RULE(lf,	h_ch('\n'));
+	H_RULE(cr,	mapch('\r', '\n'));	/* semantic value: \n */
+	H_RULE(lf,	h_ch('\n'));		/* semantic value: \n */
+	H_RULE(crlf,	h_right(cr, lf));	/* semantic value: \n */
 	H_RULE(eol,	CHX(crlf, cr, lf));
-	H_RULE(line,	h_many(h_not_in("\r\n", 2)));
+	H_RULE(line,	h_many(NOT_IN("\r\n")));
 
 	/* character classes */
 #define WCHARS "\0\t\n\f\r "
@@ -122,11 +155,21 @@ pdf_parser(void)
 	//H_RULE(dchar,	IN(DCHARS));			/* delimiter */
 	//H_RULE(rchar,	NOT_IN(WCHARS DCHARS));		/* regular */
 	H_RULE(nchar,	NOT_IN(WCHARS DCHARS "#"));	/* name */
+	H_RULE(schar,	NOT_IN("()\n\\"));		/* string literal */
 	H_ARULE(digit,	h_ch_range('0', '9'));
 	H_ARULE(pdigit,	h_ch_range('1', '9'));
 	H_ARULE(hlower,	h_ch_range('a', 'f'));
 	H_ARULE(hupper,	h_ch_range('A', 'F'));
 	H_RULE(hdigit,	CHX(digit, hlower, hupper));
+	H_ARULE(odigit,	h_ch_range('0', '7'));
+
+	H_RULE(sign,	IN("+-"));
+	H_RULE(period,	h_ch('.'));
+	H_RULE(slash,	h_ch('/'));
+	H_RULE(hash,	h_ch('#'));
+	H_RULE(bslash,	h_ch('\\'));
+	H_RULE(lparen,	h_ch('('));
+	H_RULE(rparen,	h_ch(')'));
 
 	/* whitespace */
 	H_RULE(comment,	h_right(h_ch('%'), line));
@@ -134,8 +177,11 @@ pdf_parser(void)
 
 #define TOK(X)	h_right(ws, X)
 #define KW(S)	TOK(h_ignore(h_literal(S)))
+// XXX this allows, for instance, "<<<<" to be parsed as "<< <<". ok?
 
 	/* misc */
+	H_RULE(epsilon,	h_epsilon_p());
+	H_RULE(empty,	SEQ(epsilon));
 	H_ARULE(nat,	TOK(SEQ(digit,  h_many(digit))));
 	H_ARULE(pnat,	TOK(SEQ(pdigit, h_many(digit))));
 
@@ -148,25 +194,36 @@ pdf_parser(void)
 	H_RULE(boole,	CHX(KW("true"), KW("false")));
 
 	/* numbers */
-	H_RULE(sign,	h_in("+-", 2));
-	H_RULE(period,	h_ch('.'));
 	H_RULE(digits,	h_many1(digit));
 	H_ARULE(intg,	TOK(SEQ(h_optional(sign), digits)));
-	H_RULE(empty,	SEQ(h_epsilon_p()));
 	H_RULE(realnn,	CHX(SEQ(digits, period, digits),	/* 12.3 */
 			    SEQ(digits, period, empty),		/* 123. */
 			    SEQ(empty, period, digits)));	/* .123 */
 	H_ARULE(real,	TOK(SEQ(h_optional(sign), realnn)));
 
 	/* names */
-	H_RULE(slash,	h_ch('/'));
-	H_RULE(hash,	h_ch('#'));
 	H_ARULE(nesc,	SEQ(hash, hdigit, hdigit));
 	H_ARULE(nstr,	h_many(CHX(nchar, nesc)));	/* '/' is valid */
 	H_RULE(name,	TOK(h_right(slash, nstr)));
 
 	/* strings */
-	H_RULE(string,	h_nothing_p());	// XXX
+	H_RULE(snest,	h_indirect());
+	H_RULE(bsn,	mapch('n', 0x0a));	/* LF */
+	H_RULE(bsr,	mapch('r', 0x0d));	/* CR */
+	H_RULE(bst,	mapch('t', 0x09));	/* HT */
+	H_RULE(bsb,	mapch('b', 0x08));	/* BS (backspace) */
+	H_RULE(bsf,	mapch('f', 0x0c));	/* FF */
+	H_RULE(escape,	CHX(bsn, bsr, bst, bsb, bsf, lparen, rparen, bslash));
+	H_ARULE(octal,	CHX(REP(odigit,3), REP(odigit,2), REP(odigit,1)));
+	H_RULE(wrap,	h_ignore(eol));
+	H_RULE(sesc,	h_right(bslash, CHX(escape, octal, wrap, epsilon)));
+						/* NB: lone '\' is ignored */
+	H_ARULE(schars,	h_many(CHX(schar, snest, sesc, eol)));
+	H_RULE(snest_,	SEQ(lparen, schars, rparen));
+	H_ARULE(litstr,	TOK(h_middle(lparen, schars, rparen)));
+	H_RULE(hexstr,	h_middle(KW("<"), h_many(TOK(hdigit)), KW(">")));
+	H_RULE(string,	CHX(litstr, hexstr));
+	h_bind_indirect(snest, snest_);
 
 	/* arrays and dictionaries */
 	H_RULE(obj,	h_indirect());
@@ -191,11 +248,11 @@ pdf_parser(void)
 	H_RULE(objdef,	SEQ(pnat, nat, KW("obj"), obj, KW("endobj")));
 	H_RULE(body,	h_many(objdef));	// XXX object streams
 
-	H_RULE(xrefs,	h_epsilon_p());
+	H_RULE(xrefs,	epsilon);
 
-	H_RULE(trailer,	h_epsilon_p());
+	H_RULE(trailer,	epsilon);
 
-	H_RULE(end,	h_epsilon_p());	// XXX
+	H_RULE(end,	epsilon);	// XXX
 	H_RULE(tail,	SEQ(body, xrefs, trailer));
 	H_RULE(pdf,	SEQ(header, SEQ/*XXX h_many1*/(tail), end));
 
