@@ -119,9 +119,9 @@ pdf_parser(void)
 #define WCHARS "\0\t\n\f\r "
 #define DCHARS "()<>[]{}/%"
 	H_RULE(wchar,	IN(WCHARS));			/* white-space */
-	//XXX H_RULE(dchar,	IN(DCHARS));			/* delimiter */
-	//XXX H_RULE(rchar,	NOT_IN(WCHARS DCHARS));		/* regular */
-	H_RULE(graph,	h_ch_range('!', '~'));
+	//H_RULE(dchar,	IN(DCHARS));			/* delimiter */
+	//H_RULE(rchar,	NOT_IN(WCHARS DCHARS));		/* regular */
+	H_RULE(nchar,	NOT_IN(WCHARS DCHARS "#"));	/* name */
 	H_ARULE(digit,	h_ch_range('0', '9'));
 	H_ARULE(pdigit,	h_ch_range('1', '9'));
 	H_ARULE(hlower,	h_ch_range('a', 'f'));
@@ -162,7 +162,7 @@ pdf_parser(void)
 	H_RULE(slash,	h_ch('/'));
 	H_RULE(hash,	h_ch('#'));
 	H_ARULE(nesc,	SEQ(hash, hdigit, hdigit));
-	H_ARULE(nstr,	h_many(CHX(graph, nesc)));	/* '/' is valid */
+	H_ARULE(nstr,	h_many(CHX(nchar, nesc)));	/* '/' is valid */
 	H_RULE(name,	TOK(h_right(slash, nstr)));
 
 	/* strings */
