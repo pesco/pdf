@@ -10,6 +10,7 @@
 #define CHX(...)	h_choice(__VA_ARGS__, NULL)
 #define REP(P,N)	h_repeat_n(P, N)
 #define IGN(P)		h_ignore(P)
+#define LIT(S)		h_ignore(h_literal(S))
 #define IN(STR)		h_in(STR, sizeof(STR))
 #define NOT_IN(STR)	h_not_in(STR, sizeof(STR))
 
@@ -207,11 +208,12 @@ pdf_parser(void)
 	H_RULE(ws,	h_many(CHX(wchar, comment)));
 
 #define TOK(X)	h_right(ws, X)
-#define KW(S)	TOK(IGN(h_literal(S)))
+#define KW(S)	TOK(LIT(S))
 // XXX this allows, for instance, "<<<<" to be parsed as "<< <<". ok?
 // XXX this allows, for instance, "endstreamendobj".
 
 	/* misc */
+	H_RULE(end,	h_end_p());
 	H_RULE(epsilon,	h_epsilon_p());
 	H_RULE(empty,	SEQ(epsilon));
 	H_ARULE(nat,	TOK(h_many1(digit)));
@@ -282,7 +284,7 @@ pdf_parser(void)
 
 	/* header */
 	H_RULE(version,	SEQ(pdigit, IGN(period), pdigit));
-	H_RULE(header,	SEQ(h_literal("%PDF-"), version, eol));
+	H_RULE(header,	h_middle(LIT("%PDF-"), version, eol));
 
 	/* body */
 	H_RULE(indobj,	CHX(stream, obj));
@@ -303,11 +305,14 @@ pdf_parser(void)
 		// XXX whitespace allowed between "xref" and eol?
 
 	/* trailer */
-	H_RULE(trailer,	epsilon);
+	H_RULE(nl,	IGN(eol));
+	H_RULE(trailer,	SEQ(KW("trailer"), dict, nl,
+			    LIT("startxref"), nl, nat, nl,
+			    LIT("%%EOF"), nl));
+		// XXX be more lenient about whitespace in the trailer?
 
-	H_RULE(end,	epsilon);	// XXX
 	H_RULE(tail,	SEQ(body, xrefs, trailer));
-	H_RULE(pdf,	SEQ(header, SEQ/*XXX h_many1*/(tail), end));
+	H_RULE(pdf,	SEQ(header, h_many1(tail), end));
 
 	return p = pdf;
 }
