@@ -1,5 +1,7 @@
 /* beginnings of a PDF parser in hammer */
 
+#include <string.h>	/* strncmp() */
+
 #include <hammer/hammer.h>
 #include <hammer/glue.h>
 
@@ -135,6 +137,10 @@ act_octal(const HParseResult *p, void *u)
 	return H_MAKE_UINT(x);
 }
 
+#define act_stream act_token
+
+HParser *kstream(HAllocator *, const HParsedToken *, void *);
+
 HParser *
 pdf_parser(void)
 {
@@ -185,6 +191,8 @@ pdf_parser(void)
 	H_ARULE(nat,	TOK(SEQ(digit,  h_many(digit))));
 	H_ARULE(pnat,	TOK(SEQ(pdigit, h_many(digit))));
 
+#define OPT(X)	CHX(X, epsilon)
+
 	/*
 	 * objects
 	 */
@@ -217,7 +225,7 @@ pdf_parser(void)
 	H_ARULE(octal,	CHX(REP(odigit,3), REP(odigit,2), REP(odigit,1)));
 	H_RULE(wrap,	h_ignore(eol));
 	H_RULE(sesc,	h_right(bslash, CHX(escape, octal, wrap, epsilon)));
-						/* NB: lone '\' is ignored */
+						/* NB: a lone '\' is ignored */
 	H_ARULE(schars,	h_many(CHX(schar, snest, sesc, eol)));
 	H_RULE(snest_,	SEQ(lparen, schars, rparen));
 	H_ARULE(litstr,	TOK(h_middle(lparen, schars, rparen)));
@@ -230,12 +238,16 @@ pdf_parser(void)
 	H_RULE(k_v,	SEQ(name, obj));
 	H_RULE(dict,	h_middle(KW("<<"), h_many(k_v), KW(">>")));
 	H_RULE(array,	h_middle(KW("["), h_many(obj), KW("]")));
+		// XXX validate: dict keys must be unique
 
 	/* streams */
-	H_RULE(stream,	h_nothing_p());	// XXX
+	H_RULE(stmbeg,	SEQ(dict, KW("stream"), OPT(cr), lf));
+	H_RULE(stmend,	SEQ(eol, KW("endstream")));
+	H_ARULE(stream,	h_left(h_bind(stmbeg, kstream, NULL), stmend));
+		// XXX is whitespace allowed between the eol and "endstream"?
 
 	H_RULE(obj_,	CHX(ref, null, boole, intg, real, name, string,
-			    array, dict, stream));
+			    array, dict));
 	h_bind_indirect(obj, obj_);
 
 	/*
@@ -245,7 +257,8 @@ pdf_parser(void)
 	H_RULE(version,	SEQ(pdigit, h_ignore(h_ch('.')), pdigit));
 	H_RULE(header,	SEQ(h_literal("%PDF-"), version, eol));
 
-	H_RULE(objdef,	SEQ(pnat, nat, KW("obj"), obj, KW("endobj")));
+	H_RULE(indobj,	CHX(stream, obj));
+	H_RULE(objdef,	SEQ(pnat, nat, KW("obj"), indobj, KW("endobj")));
 	H_RULE(body,	h_many(objdef));	// XXX object streams
 
 	H_RULE(xrefs,	epsilon);
@@ -257,6 +270,43 @@ pdf_parser(void)
 	H_RULE(pdf,	SEQ(header, SEQ/*XXX h_many1*/(tail), end));
 
 	return p = pdf;
+}
+
+/*
+ * This continuation takes the stream dictionary (as first element of x) and
+ * should return a parser that consumes exactly the bytes that make up the
+ * stream data.
+ */
+HParser *
+kstream(HAllocator *mm__, const HParsedToken *x, void *env)
+{
+	HCountedArray *dict = H_INDEX_SEQ(x, 0);
+	HParsedToken *ent, *v = NULL;
+	HBytes k;
+	size_t sz;
+
+	//fprintf(stderr, "kstream dict: %zu elems\n", dict->used);
+	//h_pprint(stderr, x, 0, 2);
+
+	/* look for the Length entry */
+	for (size_t i = 0; i < dict->used; i++) {
+		ent = dict->elements[i];
+		k = H_INDEX_BYTES(ent, 0);
+
+		if (strncmp("Length", k.token, k.len) == 0) {	// XXX strncasecmp?
+			v = H_INDEX_TOKEN(ent, 1);
+			break;
+		}
+	}
+	if (v == NULL || v->token_type != TT_UINT)
+		goto fail;
+	sz = (size_t)v->uint;
+
+	return h_repeat_n__m(mm__, h_uint8__m(mm__), sz);
+fail:
+	//fprintf(stderr, "kstream fail.\n");
+	//if(v) fprintf(stderr, " v:%d\n", v->token_type);
+	return h_nothing_p__m(mm__);
 }
 
 
