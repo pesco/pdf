@@ -273,7 +273,7 @@ pdf_parser(void)
 
 	/* streams */
 	H_RULE(stmbeg,	SEQ(dict, KW("stream"), OPT(cr), lf));
-	H_RULE(stmend,	SEQ(eol, KW("endstream")));
+	H_RULE(stmend,	SEQ(OPT(eol), LIT("endstream")));
 	H_ARULE(stream,	h_left(h_bind(stmbeg, kstream, NULL), stmend));
 		// XXX is whitespace allowed between the eol and "endstream"?
 
