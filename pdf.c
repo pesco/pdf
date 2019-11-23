@@ -353,7 +353,7 @@ kstream(HAllocator *mm__, const HParsedToken *x, void *env)
 		ent = dict->elements[i];
 		k = H_INDEX_BYTES(ent, 0);
 
-		if (strncmp("Length", k.token, k.len) == 0) {	// XXX strncasecmp?
+		if (k.len == 6 && strncmp("Length", k.token, k.len) == 0) {
 			v = H_INDEX_TOKEN(ent, 1);
 			break;
 		}
