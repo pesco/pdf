@@ -176,7 +176,6 @@ init_parser(void)
 	H_RULE(lf,	h_ch('\n'));		/* semantic value: \n */
 	H_RULE(crlf,	h_right(cr, lf));	/* semantic value: \n */
 	H_RULE(eol,	CHX(crlf, cr, lf));
-	H_RULE(nl,	IGN(eol));
 	H_RULE(line,	h_many(NOT_IN("\r\n")));
 
 	/* character classes */
@@ -221,6 +220,7 @@ init_parser(void)
 // XXX this allows, for instance, "<<<<" to be parsed as "<< <<". ok?
 
 	/* misc */
+	H_RULE(nl,	IGN(h_right(lws, eol)));
 	H_RULE(end,	h_end_p());
 	H_RULE(epsilon,	h_epsilon_p());
 	H_RULE(empty,	SEQ(epsilon));
@@ -259,7 +259,8 @@ init_parser(void)
 	H_RULE(bsf,	mapch('f', 0x0c));	/* FF */
 	H_RULE(escape,	CHX(bsn, bsr, bst, bsb, bsf, lparen, rparen, bslash));
 	H_ARULE(octal,	CHX(REP(odigit,3), REP(odigit,2), REP(odigit,1)));
-	H_RULE(sesc,	h_right(bslash, CHX(escape, octal, nl, epsilon)));
+	H_RULE(wrap,	IGN(eol));
+	H_RULE(sesc,	h_right(bslash, CHX(escape, octal, wrap, epsilon)));
 		/* NB: lone backslashes and escaped newlines are ignored */
 	H_ARULE(schars,	h_many(CHX(schar, snest, sesc, eol)));
 	H_RULE(snest_,	SEQ(lparen, schars, rparen));
@@ -294,7 +295,7 @@ init_parser(void)
 
 	/* header */
 	H_RULE(version,	SEQ(pdigit, IGN(period), pdigit));
-	H_RULE(header,	h_middle(LIT("%PDF-"), version, eol));
+	H_RULE(header,	h_middle(LIT("%PDF-"), version, nl));
 
 	/* body */
 	H_RULE(indobj,	CHX(stream, obj));
@@ -311,17 +312,16 @@ init_parser(void)
 	H_ARULE(xrnat,	h_many1(digit));
 	H_RULE(xrhead,	SEQ(xrnat, IGN(sp), xrnat, nl));
 	H_RULE(xrsub,	SEQ(xrhead, h_many(xrent)));
-	H_ARULE(xrefs,	SEQ(KW("xref"), eol, h_many(xrsub)));
-		// XXX whitespace allowed between "xref" and eol?
+	H_ARULE(xrefs,	SEQ(KW("xref"), nl, h_many(xrsub)));
 		// XXX cross-reference streams
 
 	/* trailer */
-	H_RULE(tdict,	SEQ(KW("trailer"), dict, lws, nl));
-	H_RULE(startxr,	SEQ(KW("startxref"), lws, nl,	// XXX KW() ok? lws ok?
-			    lws, xrnat, lws, nl));	// XXX trailing lws ok?
+	H_RULE(tdict,	SEQ(KW("trailer"), dict, nl));
+	H_RULE(startxr,	SEQ(KW("startxref"), nl,
+			    lws, xrnat, nl));
 		// NB: lws before xref offset is allowed, cf. p.48 (example 4)
-	H_RULE(eofmark,	SEQ(LIT("%%EOF"), CHX(eol, end)));
-		// XXX should lws be allowed around EOF marker?
+	H_RULE(eofmark,	SEQ(LIT("%%EOF"), CHX(nl, end)));
+		// XXX should lws be allowed before EOF marker?
 	H_RULE(txrefs,	SEQ(xrefs, tdict));
 	H_RULE(trailer,	SEQ(h_optional(txrefs), startxr, eofmark));
 
