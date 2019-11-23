@@ -188,7 +188,7 @@ init_parser(void)
 	//H_RULE(dchar,	IN(DCHARS));			/* delimiter */
 	H_RULE(rchar,	NOT_IN(WCHARS DCHARS));		/* regular */
 	H_RULE(nchar,	NOT_IN(WCHARS DCHARS "#"));	/* name */
-	H_RULE(schar,	NOT_IN("()\n\\"));		/* string literal */
+	H_RULE(schar,	NOT_IN("()\n\r\\"));		/* string literal */
 	H_ARULE(digit,	h_ch_range('0', '9'));
 	H_ARULE(pdigit,	h_ch_range('1', '9'));
 	H_ARULE(hlower,	h_ch_range('a', 'f'));
