@@ -277,7 +277,7 @@ pdf_parser(void)
 	H_ARULE(stream,	h_left(h_bind(stmbeg, kstream, NULL), stmend));
 		// XXX is whitespace allowed between the eol and "endstream"?
 
-	H_RULE(obj_,	CHX(ref, null, boole, intg, real, name, string,
+	H_RULE(obj_,	CHX(ref, null, boole, real, intg, name, string,
 			    array, dict));
 	h_bind_indirect(obj, obj_);
 
