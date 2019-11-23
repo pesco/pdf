@@ -345,9 +345,6 @@ kstream(HAllocator *mm__, const HParsedToken *x, void *env)
 	HBytes k;
 	size_t sz;
 
-	//fprintf(stderr, "kstream dict: %zu elems\n", dict->used);
-	//h_pprint(stderr, x, 0, 2);
-
 	/* look for the Length entry */
 	for (size_t i = 0; i < dict->used; i++) {
 		ent = dict->elements[i];
@@ -358,15 +355,20 @@ kstream(HAllocator *mm__, const HParsedToken *x, void *env)
 			break;
 		}
 	}
-	if (v == NULL || v->token_type != TT_UINT)
+	if (v == NULL || v->token_type != TT_SINT || v->sint < 0)
 		goto fail;
-	sz = (size_t)v->uint;
-		// XXX support indirect objects for the Length value?!
+	sz = (size_t)v->sint;
+		// XXX support indirect objects for the Length value!
 
 	return h_repeat_n__m(mm__, h_uint8__m(mm__), sz);
 fail:
-	//fprintf(stderr, "kstream fail.\n");
-	//if(v) fprintf(stderr, " v:%d\n", v->token_type);
+	if (v == NULL)
+		fprintf(stderr, "stream /Length missing\n");
+	else if (v -> token_type != TT_SINT)
+		fprintf(stderr, "stream /Length not an integer\n");
+	else if (v < 0)
+		fprintf(stderr, "stream /Length negative\n");
+	h_pprint(stderr, x, 0, 2);	// XXX debug
 	return h_nothing_p__m(mm__);
 }
 
