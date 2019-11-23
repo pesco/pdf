@@ -11,8 +11,8 @@
 #define REP(P,N)	h_repeat_n(P, N)
 #define IGN(P)		h_ignore(P)
 #define LIT(S)		h_ignore(h_literal(S))
-#define IN(STR)		h_in(STR, sizeof(STR))
-#define NOT_IN(STR)	h_not_in(STR, sizeof(STR))
+#define IN(STR)		h_in(STR, sizeof(STR) - 1)
+#define NOT_IN(STR)	h_not_in(STR, sizeof STR - 1)
 
 
 /* a combinator to parse a given character but return a different value */
