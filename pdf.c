@@ -176,12 +176,15 @@ pdf_parser(void)
 	H_RULE(lf,	h_ch('\n'));		/* semantic value: \n */
 	H_RULE(crlf,	h_right(cr, lf));	/* semantic value: \n */
 	H_RULE(eol,	CHX(crlf, cr, lf));
+	H_RULE(nl,	IGN(eol));
 	H_RULE(line,	h_many(NOT_IN("\r\n")));
 
 	/* character classes */
-#define WCHARS "\0\t\n\f\r "
-#define DCHARS "()<>[]{}/%"
+#define LWCHARS	"\0\t\f "
+#define WCHARS	LWCHARS "\n\r"
+#define DCHARS	"()<>[]{}/%"
 	H_RULE(wchar,	IN(WCHARS));			/* white-space */
+	H_RULE(lwchar,	IN(LWCHARS));			/* "line" whitespace */
 	//H_RULE(dchar,	IN(DCHARS));			/* delimiter */
 	//H_RULE(rchar,	NOT_IN(WCHARS DCHARS));		/* regular */
 	H_RULE(nchar,	NOT_IN(WCHARS DCHARS "#"));	/* name */
@@ -204,8 +207,9 @@ pdf_parser(void)
 	H_RULE(rparen,	h_ch(')'));
 
 	/* whitespace */
-	H_RULE(comment,	h_right(percent, line));
-	H_RULE(ws,	h_many(CHX(wchar, comment)));
+	H_RULE(comment,	SEQ(percent, line));
+	H_RULE(ws,	IGN(h_many(CHX(wchar, comment))));
+	H_RULE(lws,	IGN(h_many(lwchar)));
 
 #define TOK(X)	h_right(ws, X)
 #define KW(S)	TOK(LIT(S))
@@ -251,9 +255,8 @@ pdf_parser(void)
 	H_RULE(bsf,	mapch('f', 0x0c));	/* FF */
 	H_RULE(escape,	CHX(bsn, bsr, bst, bsb, bsf, lparen, rparen, bslash));
 	H_ARULE(octal,	CHX(REP(odigit,3), REP(odigit,2), REP(odigit,1)));
-	H_RULE(wrap,	IGN(eol));
-	H_RULE(sesc,	h_right(bslash, CHX(escape, octal, wrap, epsilon)));
-						/* NB: a lone '\' is ignored */
+	H_RULE(sesc,	h_right(bslash, CHX(escape, octal, nl, epsilon)));
+		/* NB: lone backslashes and escaped newlines are ignored */
 	H_ARULE(schars,	h_many(CHX(schar, snest, sesc, eol)));
 	H_RULE(snest_,	SEQ(lparen, schars, rparen));
 	H_ARULE(litstr,	TOK(h_middle(lparen, schars, rparen)));
@@ -299,17 +302,22 @@ pdf_parser(void)
 	H_ARULE(xrgen,	REP(digit, 5));
 	H_RULE(xrent,	SEQ(xroff, IGN(sp), xrgen, IGN(sp), xrtyp, IGN(xreol)));
 	H_ARULE(xrnat,	h_many1(digit));
-	H_RULE(xrhead,	SEQ(xrnat, IGN(sp), xrnat, IGN(eol)));
+	H_RULE(xrhead,	SEQ(xrnat, IGN(sp), xrnat, nl));
 	H_RULE(xrsub,	SEQ(xrhead, h_many(xrent)));
 	H_ARULE(xrefs,	SEQ(KW("xref"), eol, h_many(xrsub)));
 		// XXX whitespace allowed between "xref" and eol?
+		// XXX cross-reference streams
 
 	/* trailer */
-	H_RULE(nl,	IGN(eol));
-	H_RULE(trailer,	SEQ(KW("trailer"), dict, nl,
-			    LIT("startxref"), nl, nat, nl,
-			    LIT("%%EOF"), nl));
-		// XXX be more lenient about whitespace in the trailer?
+	H_RULE(trailer,	SEQ(KW("trailer"), dict, lws, nl,
+			    KW("startxref"), lws, nl,
+			    lws, xrnat, lws, nl,
+			    LIT("%%EOF"), OPT(nl)));	// XXX require nl?
+		// XXX ws ok before startxref?
+		// XXX lws ok after startxref?
+		// XXX lws ok after xref offset?
+		// XXX lws ok around EOF marker?
+		// NB: lws before xref offset is allowed, cf. p.48 (example 4)
 
 	H_RULE(tail,	SEQ(body, xrefs, trailer));
 	H_RULE(pdf,	SEQ(header, h_many1(tail), end));
@@ -346,6 +354,7 @@ kstream(HAllocator *mm__, const HParsedToken *x, void *env)
 	if (v == NULL || v->token_type != TT_UINT)
 		goto fail;
 	sz = (size_t)v->uint;
+		// XXX support indirect objects for the Length value?!
 
 	return h_repeat_n__m(mm__, h_uint8__m(mm__), sz);
 fail:
