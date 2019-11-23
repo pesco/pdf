@@ -84,7 +84,7 @@ act_pnat(const HParseResult *p, void *u)
 HParsedToken *
 act_intg(const HParseResult *p, void *u)
 {
-	uint64_t x = 0;
+	int64_t x = 0;
 	HCountedArray *seq = H_FIELD_SEQ(1);
 
 	for (size_t i = 0; i < seq->used; i++)
@@ -95,7 +95,7 @@ act_intg(const HParseResult *p, void *u)
 	    sgn->bytes.token[0] == '-')
 		x = -x;
 	
-	return H_MAKE_UINT(x);
+	return H_MAKE_SINT(x);
 }
 
 HParsedToken *
