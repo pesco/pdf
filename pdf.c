@@ -316,17 +316,17 @@ pdf_parser(void)
 		// XXX cross-reference streams
 
 	/* trailer */
-	H_RULE(trailer,	SEQ(KW("trailer"), dict, lws, nl,
-			    KW("startxref"), lws, nl,
-			    lws, xrnat, lws, nl,
-			    LIT("%%EOF"), OPT(nl)));	// XXX require nl?
-		// XXX ws ok before startxref?
-		// XXX lws ok after startxref?
-		// XXX lws ok after xref offset?
-		// XXX lws ok around EOF marker?
+	H_RULE(tdict,	SEQ(KW("trailer"), dict, lws, nl));
+	H_RULE(startxr,	SEQ(KW("startxref"), lws, nl,	// XXX KW() ok? lws ok?
+			    lws, xrnat, lws, nl));	// XXX trailing lws ok?
 		// NB: lws before xref offset is allowed, cf. p.48 (example 4)
+	H_RULE(eofmark,	SEQ(LIT("%%EOF"), CHX(eol, end)));
+		// XXX should lws be allowed around EOF marker?
+	H_RULE(txrefs,	SEQ(xrefs, tdict));
+	H_RULE(trailer,	SEQ(h_optional(txrefs), startxr, eofmark));
 
-	H_RULE(tail,	SEQ(body, xrefs, trailer));
+	H_RULE(tail,	SEQ(body, trailer));
+	//H_RULE(pdf,	SEQ(header, h_many(tail), OPT(body), epsilon));	// XXX debug
 	H_RULE(pdf,	SEQ(header, h_many1(tail), end));
 
 	return p = pdf;
