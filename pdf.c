@@ -186,7 +186,7 @@ pdf_parser(void)
 	H_RULE(wchar,	IN(WCHARS));			/* white-space */
 	H_RULE(lwchar,	IN(LWCHARS));			/* "line" whitespace */
 	//H_RULE(dchar,	IN(DCHARS));			/* delimiter */
-	//H_RULE(rchar,	NOT_IN(WCHARS DCHARS));		/* regular */
+	H_RULE(rchar,	NOT_IN(WCHARS DCHARS));		/* regular */
 	H_RULE(nchar,	NOT_IN(WCHARS DCHARS "#"));	/* name */
 	H_RULE(schar,	NOT_IN("()\n\\"));		/* string literal */
 	H_ARULE(digit,	h_ch_range('0', '9'));
@@ -205,16 +205,20 @@ pdf_parser(void)
 	H_RULE(bslash,	h_ch('\\'));
 	H_RULE(lparen,	h_ch('('));
 	H_RULE(rparen,	h_ch(')'));
+	H_RULE(langle,	h_ch('<'));
+	H_RULE(rangle,	h_ch('>'));
+	H_RULE(lbrack,	h_ch('['));
+	H_RULE(rbrack,	h_ch(']'));
 
 	/* whitespace */
 	H_RULE(comment,	SEQ(percent, line));
 	H_RULE(ws,	IGN(h_many(CHX(wchar, comment))));
 	H_RULE(lws,	IGN(h_many(lwchar)));
 
-#define TOK(X)	h_right(ws, X)
+#define TOK(X)	h_middle(ws, X, h_not(rchar))
 #define KW(S)	TOK(LIT(S))
+#define TOKD(X)	h_right(ws, X)	/* for tokens that end on delimiters */
 // XXX this allows, for instance, "<<<<" to be parsed as "<< <<". ok?
-// XXX this allows, for instance, "endstreamendobj".
 
 	/* misc */
 	H_RULE(end,	h_end_p());
@@ -259,16 +263,19 @@ pdf_parser(void)
 		/* NB: lone backslashes and escaped newlines are ignored */
 	H_ARULE(schars,	h_many(CHX(schar, snest, sesc, eol)));
 	H_RULE(snest_,	SEQ(lparen, schars, rparen));
-	H_ARULE(litstr,	TOK(h_middle(lparen, schars, rparen)));
-	H_RULE(hexstr,	h_middle(KW("<"), h_many(TOK(hdigit)), KW(">")));
+	H_ARULE(litstr,	h_middle(TOKD(lparen), schars, rparen));
+	H_RULE(hexchr,	h_right(ws, hdigit));
+	H_RULE(hexstr,	h_middle(TOKD(langle), h_many(hexchr), TOKD(rangle)));
 	H_RULE(string,	CHX(litstr, hexstr));
 	h_bind_indirect(snest, snest_);
 
 	/* arrays and dictionaries */
+	H_RULE(dopen,	LIT("<<"));
+	H_RULE(dclose,	LIT(">>"));
 	H_RULE(obj,	h_indirect());
 	H_RULE(k_v,	SEQ(name, obj));
-	H_RULE(dict,	h_middle(KW("<<"), h_many(k_v), KW(">>")));
-	H_RULE(array,	h_middle(KW("["), h_many(obj), KW("]")));
+	H_RULE(dict,	h_middle(TOKD(dopen), h_many(k_v), TOKD(dclose)));
+	H_RULE(array,	h_middle(TOKD(lbrack), h_many(obj), TOKD(rbrack)));
 		// XXX validate: dict keys must be unique
 
 	/* streams */
