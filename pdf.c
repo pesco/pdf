@@ -162,15 +162,15 @@ act_octal(const HParseResult *p, void *u)
  * input grammar
  */
 
+HParser *p_pdf;
+HParser *p_pdfdbg;
+
 /* continuation for h_bind() */
 HParser *kstream(HAllocator *, const HParsedToken *, void *);
 
-HParser *
-pdf_parser(void)
+void
+init_parser(void)
 {
-	static HParser *p = NULL;
-	if(p) return p;
-
 	/* lines */
 	H_RULE(cr,	mapch('\r', '\n'));	/* semantic value: \n */
 	H_RULE(lf,	h_ch('\n'));		/* semantic value: \n */
@@ -326,10 +326,13 @@ pdf_parser(void)
 	H_RULE(trailer,	SEQ(h_optional(txrefs), startxr, eofmark));
 
 	H_RULE(tail,	SEQ(body, trailer));
-	//H_RULE(pdf,	SEQ(header, h_many(tail), OPT(body), epsilon));	// XXX debug
 	H_RULE(pdf,	SEQ(header, h_many1(tail), end));
 
-	return p = pdf;
+	/* debug parser to consume as much as possible */
+	H_RULE(pdfdbg,	SEQ(header, h_many(tail), body, OPT(trailer)));
+
+	p_pdf = pdf;
+	p_pdfdbg = pdfdbg;
 }
 
 /*
@@ -360,6 +363,7 @@ kstream(HAllocator *mm__, const HParsedToken *x, void *env)
 	sz = (size_t)v->sint;
 		// XXX support indirect objects for the Length value!
 
+	//fprintf(stderr, "parsing stream object, length %zu.\n", sz);	// XXX debug
 	return h_repeat_n__m(mm__, h_uint8__m(mm__), sz);
 fail:
 	if (v == NULL)
@@ -368,7 +372,7 @@ fail:
 		fprintf(stderr, "stream /Length not an integer\n");
 	else if (v < 0)
 		fprintf(stderr, "stream /Length negative\n");
-	h_pprint(stderr, x, 0, 2);	// XXX debug
+	//h_pprint(stderr, x, 0, 2);	// XXX debug
 	return h_nothing_p__m(mm__);
 }
 
@@ -378,15 +382,14 @@ fail:
  */
 
 #include <stdio.h>
+#include <inttypes.h>
 #include <err.h>
-#include <assert.h>
 #include <fcntl.h>	/* open() */
 #include <unistd.h>	/* lseek() */
 #include <sys/mman.h>	/* mmap() */
 
 int main(int argc, char *argv[])
 {
-	HParser *p;
 	HParseResult *res;
 	const char *infile = NULL;
 	const uint8_t *input;
@@ -412,11 +415,21 @@ int main(int argc, char *argv[])
 		err(1, "mmap");
 
 	/* build and run parser */
-	p = pdf_parser();
-	assert(p != NULL);
-	res = h_parse(p, input, sz);
+	init_parser();
+	res = h_parse(p_pdf, input, sz);
 	if (!res) {
 		fprintf(stderr, "%s: no parse\n", infile);
+
+		/* help us find the error */
+		res = h_parse(p_pdfdbg, input, sz);
+		if (res) {
+			int64_t pos = res->bit_length / 8;
+			fprintf(stderr, "error after position"
+			    " %" PRId64 " (0x%" PRIx64 ")\n",
+			    pos, pos);
+			//h_pprint(stderr, res->ast, 0, 2);	// XXX debug
+		}
+
 		return 1;
 	}
 
