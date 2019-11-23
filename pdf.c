@@ -1,4 +1,6 @@
-/* beginnings of a PDF parser in hammer */
+/* beginnings of a PDF parser in hammer
+ * pesco 2019
+ */
 
 #include <string.h>	/* strncmp() */
 
