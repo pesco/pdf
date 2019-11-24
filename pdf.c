@@ -142,7 +142,7 @@ act_nesc(const HParseResult *p, void *u)
 }
 
 #define act_schars h_act_flatten
-#define act_litstr act_token
+#define act_string act_token
 
 HParsedToken *
 act_octal(const HParseResult *p, void *u)
@@ -265,10 +265,10 @@ init_parser(void)
 		/* NB: lone backslashes and escaped newlines are ignored */
 	H_ARULE(schars,	h_many(CHX(schar, snest, sesc, eol)));
 	H_RULE(snest_,	SEQ(lparen, schars, rparen));
-	H_ARULE(litstr,	h_middle(TOKD(lparen), schars, rparen));
+	H_RULE(litstr,	h_middle(TOKD(lparen), schars, rparen));
 	H_RULE(hexchr,	h_right(ws, hdigit));
 	H_RULE(hexstr,	h_middle(TOKD(langle), h_many(hexchr), TOKD(rangle)));
-	H_RULE(string,	CHX(litstr, hexstr));
+	H_ARULE(string,	CHX(litstr, hexstr));
 	h_bind_indirect(snest, snest_);
 
 	/* arrays and dictionaries */
