@@ -156,7 +156,6 @@ act_octal(const HParseResult *p, void *u)
 	return H_MAKE_UINT(x);
 }
 
-#define act_stream act_token
 #define act_xrefs h_act_last
 
 
@@ -284,7 +283,7 @@ init_parser(void)
 	/* streams */
 	H_RULE(stmbeg,	SEQ(dict, KW("stream"), OPT(cr), lf));
 	H_RULE(stmend,	SEQ(OPT(eol), LIT("endstream")));
-	H_ARULE(stream,	h_left(h_bind(stmbeg, kstream, NULL), stmend));
+	H_RULE(stream,	h_left(h_bind(stmbeg, kstream, NULL), stmend));
 		// XXX is whitespace allowed between the eol and "endstream"?
 
 	H_RULE(obj_,	CHX(ref, null, boole, real, intg, name, string,
@@ -366,7 +365,9 @@ kstream(HAllocator *mm__, const HParsedToken *x, void *env)
 		// XXX support indirect objects for the Length value!
 
 	//fprintf(stderr, "parsing stream object, length %zu.\n", sz);	// XXX debug
-	return h_repeat_n__m(mm__, h_uint8__m(mm__), sz);
+	HParser *tell = h_tell__m(mm__);
+	HParser *skip = h_skip__m(mm__, sz * 8);
+	return h_sequence__m(mm__, tell, skip, tell, NULL);
 fail:
 #if 0
 	if (v == NULL)
