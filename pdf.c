@@ -165,6 +165,8 @@ act_octal(const HParseResult *p, void *u)
 
 HParser *p_pdf;
 HParser *p_pdfdbg;
+HParser *p_startxref;
+HParser *p_xref;
 
 /* continuation for h_bind() */
 HParser *kstream(HAllocator *, const HParsedToken *, void *);
@@ -317,23 +319,23 @@ init_parser(void)
 		// XXX cross-reference streams
 
 	/* trailer */
-	H_RULE(tdict,	SEQ(KW("trailer"), dict, nl));
-	H_RULE(startxr,	SEQ(KW("startxref"), nl,
-			    lws, xrnat, nl));
-		// NB: lws before xref offset is allowed, cf. p.48 (example 4)
-	H_RULE(eofmark,	SEQ(LIT("%%EOF"), CHX(nl, end)));
+	H_RULE(startxr,	SEQ(nl, KW("startxref"), nl,
+			    lws, xrnat, nl,
+			    LIT("%%EOF"), CHX(nl, end)));
 		// XXX should lws be allowed before EOF marker?
-	H_RULE(txrefs,	SEQ(xrefs, tdict));
-	H_RULE(trailer,	SEQ(h_optional(txrefs), startxr, eofmark));
+		// NB: lws before xref offset is allowed, cf. p.48 (example 4)
+	H_RULE(xr_td,	SEQ(xrefs, KW("trailer"), dict));
 
-	H_RULE(tail,	SEQ(body, trailer));
+	H_RULE(tail,	SEQ(body, h_optional(xr_td), startxr));
 	H_RULE(pdf,	SEQ(header, h_many1(tail), end));
 
 	/* debug parser to consume as much as possible */
-	H_RULE(pdfdbg,	SEQ(header, h_many(tail), body, OPT(trailer)));
+	H_RULE(pdfdbg,	SEQ(header, h_many(tail), body, OPT(xr_td), OPT(startxr)));
 
 	p_pdf = pdf;
 	p_pdfdbg = pdfdbg;
+	p_startxref = startxr;
+	p_xref = xr_td;
 }
 
 /*
@@ -395,10 +397,10 @@ fail:
 
 int main(int argc, char *argv[])
 {
-	HParseResult *res;
+	HParseResult *res = NULL;
 	const char *infile = NULL;
 	const uint8_t *input;
-	size_t sz;
+	size_t sz, startxref;
 	int fd;
 
 	/* command line handling */
@@ -419,8 +421,33 @@ int main(int argc, char *argv[])
 	if (input == MAP_FAILED)
 		err(1, "mmap");
 
-	/* build and run parser */
+	/* build parsers */
 	init_parser();
+
+	/* search for the "startxref" section from the back of the file */
+	HParser *p = h_left(p_startxref, h_end_p());
+	for (size_t i = 0; i < sz; i++) {
+		res = h_parse(p, input + sz - i, i);
+		if (res) break;
+	}
+	if (res == NULL) {
+		fprintf(stderr, "%s: startxref not found\n", infile);
+		return 1;
+	}
+	startxref = H_INDEX_UINT(res->ast, 0);
+
+	/* parse cross-references and trailer dictionary */
+	res = h_parse(p_xref, input + startxref, sz - startxref);
+	if (!res) {
+		fprintf(stderr, "%s: error parsing xref/trailer at "
+		    "position %zu (0x%zx)\n", infile, startxref, startxref);
+		// continue anyway...
+	}
+	// XXX debug
+	//h_pprint(stderr, res->ast, 0, 2);
+	//return 0;
+
+	/* run the main parser */
 	res = h_parse(p_pdf, input, sz);
 	if (!res) {
 		fprintf(stderr, "%s: no parse\n", infile);
