@@ -368,12 +368,14 @@ kstream(HAllocator *mm__, const HParsedToken *x, void *env)
 	//fprintf(stderr, "parsing stream object, length %zu.\n", sz);	// XXX debug
 	return h_repeat_n__m(mm__, h_uint8__m(mm__), sz);
 fail:
+#if 0
 	if (v == NULL)
 		fprintf(stderr, "stream /Length missing\n");
 	else if (v -> token_type != TT_SINT)
 		fprintf(stderr, "stream /Length not an integer\n");
 	else if (v < 0)
 		fprintf(stderr, "stream /Length negative\n");
+#endif
 	//h_pprint(stderr, x, 0, 2);	// XXX debug
 	return h_nothing_p__m(mm__);
 }
@@ -426,9 +428,9 @@ int main(int argc, char *argv[])
 		res = h_parse(p_pdfdbg, input, sz);
 		if (res) {
 			int64_t pos = res->bit_length / 8;
-			fprintf(stderr, "error after position"
+			fprintf(stderr, "%s: error after position"
 			    " %" PRId64 " (0x%" PRIx64 ")\n",
-			    pos, pos);
+			    infile, pos, pos);
 			//h_pprint(stderr, res->ast, 0, 2);	// XXX debug
 		}
 
