@@ -466,10 +466,7 @@ int main(int argc, char *argv[])
 	}
 
 	/* print result */
-	if (!res->ast)
-		printf("null\n");
-	else
-		h_pprint(stdout, res->ast, 0, 2);
+	h_pprint(stdout, res->ast, 0, 2);
 
 	return 0;
 }
