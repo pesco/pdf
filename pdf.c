@@ -379,7 +379,7 @@ fail:
 	else if (v < 0)
 		fprintf(stderr, "stream /Length negative\n");
 #endif
-	//h_pprint(stderr, x, 0, 2);	// XXX debug
+	//h_pprintln(stderr, x);	// XXX debug
 	return h_nothing_p__m(mm__);
 }
 
@@ -444,7 +444,7 @@ int main(int argc, char *argv[])
 		// continue anyway...
 	}
 	// XXX debug
-	//h_pprint(stderr, res->ast, 0, 2);
+	//h_pprintln(stderr, res->ast);
 	//return 0;
 
 	/* run the main parser */
@@ -459,14 +459,14 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "%s: error after position"
 			    " %" PRId64 " (0x%" PRIx64 ")\n",
 			    infile, pos, pos);
-			//h_pprint(stderr, res->ast, 0, 2);	// XXX debug
+			//h_pprintln(stderr, res->ast);	// XXX debug
 		}
 
 		return 1;
 	}
 
 	/* print result */
-	h_pprint(stdout, res->ast, 0, 2);
+	h_pprintln(stdout, res->ast);
 
 	return 0;
 }
