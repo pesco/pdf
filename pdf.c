@@ -31,6 +31,26 @@ mapch(uint8_t c, uint8_t v)
 	return h_action(h_ch(c), act_mapch, (void *)(uintptr_t)v);
 }
 
+/* a helper to look up a value in a dictionary */
+const HParsedToken *
+dictentry(const HCountedArray *dict, const char *key)
+{
+	HParsedToken *ent;
+	HBytes k;
+	size_t len;
+
+	len = strlen(key);
+	for (size_t i = 0; i < dict->used; i++) {
+		ent = dict->elements[i];
+		k = H_INDEX_BYTES(ent, 0);
+
+		if (k.len == len && strncmp(key, k.token, k.len) == 0)
+			return H_INDEX_TOKEN(ent, 1);
+	}
+
+	return NULL;
+}
+
 
 /*
  * semantic actions
@@ -157,6 +177,60 @@ act_octal(const HParseResult *p, void *u)
 }
 
 #define act_xrefs h_act_last
+
+/*
+ * validate the /Type field on a cross-reference stream.
+ *
+ * p = pnat nat (dict offs offs)
+ */
+bool
+validate_xrstm(HParseResult *p, void *u)
+{
+	const HCountedArray *tdict = H_FIELD_SEQ(2, 0);
+	const HParsedToken *v = dictentry(tdict, "Type");
+
+#if 0
+	if (v == NULL)
+		fprintf(stderr, "stream dict has not /Type\n");
+	else if (v->token_type != TT_BYTES)
+		fprintf(stderr, "stream /Type is no name object\n");
+	else if (v->bytes.len == 4 && strncmp("XRef", v->bytes.token, v->bytes.len) == 0)
+		return true;
+	return false;
+#endif
+
+	return (v != NULL && v->token_type == TT_BYTES && v->bytes.len == 4 && 
+	    strncmp("XRef", v->bytes.token, v->bytes.len) == 0);
+}
+
+/*
+ * interpret a cross-reference stream and return it in the same form as other
+ * cross-reference sections:
+ *
+ * p = pnat nat (dict offs offs)
+ * result = (xrefs dict)
+ */
+HParsedToken *
+act_xrstm(const HParseResult *p, void *u)
+{
+	HParsedToken *xrefs, *offs1, *offs2, *dict, *result;
+
+	dict = H_INDEX_TOKEN(p->ast, 2, 0);
+	offs1 = H_INDEX_TOKEN(p->ast, 2, 1);
+	offs2 = H_INDEX_TOKEN(p->ast, 2, 2);
+
+	// XXX decode XRefStm
+
+	xrefs = H_MAKE_SEQN(2);
+	xrefs->seq->elements[0] = offs1;
+	xrefs->seq->elements[1] = offs2;
+	xrefs->seq->used = 2;
+	result = H_MAKE_SEQN(2);
+	result->seq->elements[0] = xrefs;
+	result->seq->elements[1] = dict;
+	result->seq->used = 2;
+	return result;
+}
 
 
 /*
@@ -316,7 +390,7 @@ init_parser(void)
 	H_RULE(xrhead,	SEQ(xrnat, IGN(sp), xrnat, nl));
 	H_RULE(xrsub,	SEQ(xrhead, h_many(xrent)));
 	H_ARULE(xrefs,	SEQ(KW("xref"), nl, h_many(xrsub)));
-		// XXX cross-reference streams
+	H_AVRULE(xrstm,	SEQ(pnat, nat, KW("obj"), stream, KW("endobj")));
 
 	/* trailer */
 	H_RULE(startxr,	SEQ(nl, KW("startxref"), nl,
@@ -324,7 +398,7 @@ init_parser(void)
 			    LIT("%%EOF"), CHX(nl, end)));
 		// XXX should lws be allowed before EOF marker?
 		// NB: lws before xref offset is allowed, cf. p.48 (example 4)
-	H_RULE(xr_td,	SEQ(xrefs, KW("trailer"), dict));
+	H_RULE(xr_td,	CHX(SEQ(xrefs, KW("trailer"), dict), xrstm));
 
 	H_RULE(tail,	SEQ(body, h_optional(xr_td), startxr));
 	H_RULE(pdf,	SEQ(header, h_many1(tail), end));
@@ -338,23 +412,10 @@ init_parser(void)
 	p_xref = xr_td;
 }
 
-const HParsedToken *
-dictentry(const HCountedArray *dict, const char *key)
+HParsedToken *
+act_return(const HParseResult *p, void *u)
 {
-	HParsedToken *ent;
-	HBytes k;
-	size_t len;
-
-	len = strlen(key);
-	for (size_t i = 0; i < dict->used; i++) {
-		ent = dict->elements[i];
-		k = H_INDEX_BYTES(ent, 0);
-
-		if (k.len == len && strncmp(key, k.token, k.len) == 0)
-			return H_INDEX_TOKEN(ent, 1);
-	}
-
-	return NULL;
+	return u;
 }
 
 /*
@@ -365,7 +426,8 @@ dictentry(const HCountedArray *dict, const char *key)
 HParser *
 kstream(HAllocator *mm__, const HParsedToken *x, void *env)
 {
-	const HCountedArray *dict = H_INDEX_SEQ(x, 0);
+	const HParsedToken *dict_t = H_INDEX_TOKEN(x, 0);
+	const HCountedArray *dict = H_CAST_SEQ(dict_t);
 	const HParsedToken *v = NULL;
 	size_t sz;
 
@@ -379,7 +441,9 @@ kstream(HAllocator *mm__, const HParsedToken *x, void *env)
 	//fprintf(stderr, "parsing stream object, length %zu.\n", sz);	// XXX debug
 	HParser *tell = h_tell__m(mm__);
 	HParser *skip = h_skip__m(mm__, sz * 8);
-	return h_sequence__m(mm__, tell, skip, tell, NULL);
+	HParser *eps  = h_epsilon_p__m(mm__);
+	HParser *ret  = h_action__m(mm__, eps, act_return, (void *)dict_t);
+	return h_sequence__m(mm__, ret, tell, skip, tell, NULL);
 fail:
 #if 0
 	if (v == NULL)
