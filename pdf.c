@@ -17,6 +17,10 @@
 #define NOT_IN(STR)	h_not_in(STR, sizeof STR - 1)
 
 
+/*
+ * some helpers
+ */
+
 /* a combinator to parse a given character but return a different value */
 
 HParsedToken *
@@ -26,9 +30,25 @@ act_mapch(const HParseResult *p, void *u)
 }
 
 HParser *
-mapch(uint8_t c, uint8_t v)
+p_mapch(uint8_t c, uint8_t v)
 {
 	return h_action(h_ch(c), act_mapch, (void *)(uintptr_t)v);
+}
+
+/* a parser that just returns a given token */
+
+HParsedToken *
+act_return(const HParseResult *p, void *u)
+{
+	return u;
+}
+
+HParser *
+p_return__m(HAllocator *mm__, const HParsedToken *tok)
+{
+	HParser *eps  = h_epsilon_p__m(mm__);
+
+	return h_action__m(mm__, eps, act_return, (void *)tok);
 }
 
 /* a helper to look up a value in a dictionary */
@@ -178,59 +198,9 @@ act_octal(const HParseResult *p, void *u)
 
 #define act_xrefs h_act_last
 
-/*
- * validate the /Type field on a cross-reference stream.
- *
- * p = pnat nat (dict offs offs)
- */
-bool
-validate_xrstm(HParseResult *p, void *u)
-{
-	const HCountedArray *tdict = H_FIELD_SEQ(2, 0);
-	const HParsedToken *v = dictentry(tdict, "Type");
-
-#if 0
-	if (v == NULL)
-		fprintf(stderr, "stream dict has not /Type\n");
-	else if (v->token_type != TT_BYTES)
-		fprintf(stderr, "stream /Type is no name object\n");
-	else if (v->bytes.len == 4 && strncmp("XRef", v->bytes.token, v->bytes.len) == 0)
-		return true;
-	return false;
-#endif
-
-	return (v != NULL && v->token_type == TT_BYTES && v->bytes.len == 4 && 
-	    strncmp("XRef", v->bytes.token, v->bytes.len) == 0);
-}
-
-/*
- * interpret a cross-reference stream and return it in the same form as other
- * cross-reference sections:
- *
- * p = pnat nat (dict offs offs)
- * result = (xrefs dict)
- */
-HParsedToken *
-act_xrstm(const HParseResult *p, void *u)
-{
-	HParsedToken *xrefs, *offs1, *offs2, *dict, *result;
-
-	dict = H_INDEX_TOKEN(p->ast, 2, 0);
-	offs1 = H_INDEX_TOKEN(p->ast, 2, 1);
-	offs2 = H_INDEX_TOKEN(p->ast, 2, 2);
-
-	// XXX decode XRefStm
-
-	xrefs = H_MAKE_SEQN(2);
-	xrefs->seq->elements[0] = offs1;
-	xrefs->seq->elements[1] = offs2;
-	xrefs->seq->used = 2;
-	result = H_MAKE_SEQN(2);
-	result->seq->elements[0] = xrefs;
-	result->seq->elements[1] = dict;
-	result->seq->used = 2;
-	return result;
-}
+/* stream semantics (defined further below) */
+bool validate_xrstm(HParseResult *, void *);
+HParsedToken *act_xrstm(const HParseResult *, void *);
 
 
 /*
@@ -246,10 +216,10 @@ HParser *p_xref;
 HParser *kstream(HAllocator *, const HParsedToken *, void *);
 
 void
-init_parser(void)
+init_parser(const char *input)
 {
 	/* lines */
-	H_RULE(cr,	mapch('\r', '\n'));	/* semantic value: \n */
+	H_RULE(cr,	p_mapch('\r', '\n'));	/* semantic value: \n */
 	H_RULE(lf,	h_ch('\n'));		/* semantic value: \n */
 	H_RULE(crlf,	h_right(cr, lf));	/* semantic value: \n */
 	H_RULE(eol,	CHX(crlf, cr, lf));
@@ -329,11 +299,11 @@ init_parser(void)
 
 	/* strings */
 	H_RULE(snest,	h_indirect());
-	H_RULE(bsn,	mapch('n', 0x0a));	/* LF */
-	H_RULE(bsr,	mapch('r', 0x0d));	/* CR */
-	H_RULE(bst,	mapch('t', 0x09));	/* HT */
-	H_RULE(bsb,	mapch('b', 0x08));	/* BS (backspace) */
-	H_RULE(bsf,	mapch('f', 0x0c));	/* FF */
+	H_RULE(bsn,	p_mapch('n', 0x0a));	/* LF */
+	H_RULE(bsr,	p_mapch('r', 0x0d));	/* CR */
+	H_RULE(bst,	p_mapch('t', 0x09));	/* HT */
+	H_RULE(bsb,	p_mapch('b', 0x08));	/* BS (backspace) */
+	H_RULE(bsf,	p_mapch('f', 0x0c));	/* FF */
 	H_RULE(escape,	CHX(bsn, bsr, bst, bsb, bsf, lparen, rparen, bslash));
 	H_ARULE(octal,	CHX(REP(odigit,3), REP(odigit,2), REP(odigit,1)));
 	H_RULE(wrap,	IGN(eol));
@@ -359,7 +329,7 @@ init_parser(void)
 	/* streams */
 	H_RULE(stmbeg,	SEQ(dict, KW("stream"), OPT(cr), lf));
 	H_RULE(stmend,	SEQ(OPT(eol), LIT("endstream")));
-	H_RULE(stream,	h_left(h_bind(stmbeg, kstream, NULL), stmend));
+	H_RULE(stream,	h_left(h_bind(stmbeg, kstream, (void *)input), stmend));
 		// XXX is whitespace allowed between the eol and "endstream"?
 
 	H_RULE(obj_,	CHX(ref, null, boole, real, intg, name, string,
@@ -412,10 +382,19 @@ init_parser(void)
 	p_xref = xr_td;
 }
 
+/* combine current position combined with env=(input,sz) into HBytes */
 HParsedToken *
-act_return(const HParseResult *p, void *u)
+act_ks_bytes(const HParseResult *p, void *env)
 {
-	return u;
+	const HBytes *bs = env;
+	size_t offset = H_CAST_UINT(p->ast) / 8;
+
+	/*
+	 * NB: we must allocate a new HBytes struct here because the old one is
+	 * allocated only temporarily for the lifetime of the continuation
+	 * below.
+	 */
+	return H_MAKE_BYTES(bs->token + offset, bs->len);
 }
 
 /*
@@ -426,6 +405,7 @@ act_return(const HParseResult *p, void *u)
 HParser *
 kstream(HAllocator *mm__, const HParsedToken *x, void *env)
 {
+	const char *input = env;
 	const HParsedToken *dict_t = H_INDEX_TOKEN(x, 0);
 	const HCountedArray *dict = H_CAST_SEQ(dict_t);
 	const HParsedToken *v = NULL;
@@ -439,11 +419,18 @@ kstream(HAllocator *mm__, const HParsedToken *x, void *env)
 		// XXX support indirect objects for the Length value!
 
 	//fprintf(stderr, "parsing stream object, length %zu.\n", sz);	// XXX debug
+
+	/* dummy struct to hold the pair (input,sz) */
+	HBytes *bytes = h_alloc(mm__, sizeof(HBytes));
+	bytes->token = input;
+	bytes->len = sz;
+
 	HParser *tell = h_tell__m(mm__);
 	HParser *skip = h_skip__m(mm__, sz * 8);
-	HParser *eps  = h_epsilon_p__m(mm__);
-	HParser *ret  = h_action__m(mm__, eps, act_return, (void *)dict_t);
-	return h_sequence__m(mm__, ret, tell, skip, tell, NULL);
+
+	HParser *bytes_p = h_action__m(mm__, tell, act_ks_bytes, bytes);
+	HParser *dict_p  = p_return__m(mm__, dict_t);
+	return h_sequence__m(mm__, dict_p, bytes_p, skip, NULL);
 fail:
 #if 0
 	if (v == NULL)
@@ -453,10 +440,58 @@ fail:
 	else if (v < 0)
 		fprintf(stderr, "stream /Length negative\n");
 #endif
-	//h_pprintln(stderr, x);	// XXX debug
+	//h_pprintln(stderr, p);	// XXX debug
 	return h_nothing_p__m(mm__);
 }
 
+/*
+ * validate the /Type field on a cross-reference stream.
+ *
+ * p = pnat nat (dict offs offs)
+ */
+bool
+validate_xrstm(HParseResult *p, void *u)
+{
+	const HCountedArray *tdict = H_FIELD_SEQ(2, 0);
+	const HParsedToken *v = dictentry(tdict, "Type");
+
+#if 0
+	if (v == NULL)
+		fprintf(stderr, "stream dict has not /Type\n");
+	else if (v->token_type != TT_BYTES)
+		fprintf(stderr, "stream /Type is no name object\n");
+	else if (v->bytes.len == 4 && strncmp("XRef", v->bytes.token, v->bytes.len) == 0)
+		return true;
+	return false;
+#endif
+
+	return (v != NULL && v->token_type == TT_BYTES && v->bytes.len == 4 &&
+	    strncmp("XRef", v->bytes.token, v->bytes.len) == 0);
+}
+
+/*
+ * interpret a cross-reference stream and return it in the same form as other
+ * cross-reference sections:
+ *
+ * p = pnat nat (dict bytes)
+ * result = (xrefs dict)
+ */
+HParsedToken *
+act_xrstm(const HParseResult *p, void *u)
+{
+	HParsedToken *bytes, *dict, *result;
+
+	dict = H_INDEX_TOKEN(p->ast, 2, 0);
+	bytes = H_INDEX_TOKEN(p->ast, 2, 1);
+
+	// XXX decode XRefStm
+
+	result = H_MAKE_SEQN(2);
+	result->seq->elements[0] = bytes;
+	result->seq->elements[1] = dict;
+	result->seq->used = 2;
+	return result;
+}
 
 /*
  * main program
@@ -587,7 +622,7 @@ main(int argc, char *argv[])
 		err(1, "mmap");
 
 	/* build parsers */
-	init_parser();
+	init_parser(input);
 
 	/* parse all cross-reference sections and trailer dictionaries */
 	xrefs = parse_xrefs(input, sz, &nxrefs);
