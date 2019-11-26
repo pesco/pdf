@@ -338,6 +338,25 @@ init_parser(void)
 	p_xref = xr_td;
 }
 
+const HParsedToken *
+dictentry(const HCountedArray *dict, const char *key)
+{
+	HParsedToken *ent;
+	HBytes k;
+	size_t len;
+
+	len = strlen(key);
+	for (size_t i = 0; i < dict->used; i++) {
+		ent = dict->elements[i];
+		k = H_INDEX_BYTES(ent, 0);
+
+		if (k.len == len && strncmp(key, k.token, k.len) == 0)
+			return H_INDEX_TOKEN(ent, 1);
+	}
+
+	return NULL;
+}
+
 /*
  * This continuation takes the stream dictionary (as first element of x) and
  * should return a parser that consumes exactly the bytes that make up the
@@ -346,21 +365,12 @@ init_parser(void)
 HParser *
 kstream(HAllocator *mm__, const HParsedToken *x, void *env)
 {
-	HCountedArray *dict = H_INDEX_SEQ(x, 0);
-	HParsedToken *ent, *v = NULL;
-	HBytes k;
+	const HCountedArray *dict = H_INDEX_SEQ(x, 0);
+	const HParsedToken *v = NULL;
 	size_t sz;
 
 	/* look for the Length entry */
-	for (size_t i = 0; i < dict->used; i++) {
-		ent = dict->elements[i];
-		k = H_INDEX_BYTES(ent, 0);
-
-		if (k.len == 6 && strncmp("Length", k.token, k.len) == 0) {
-			v = H_INDEX_TOKEN(ent, 1);
-			break;
-		}
-	}
+	v = dictentry(dict, "Length");
 	if (v == NULL || v->token_type != TT_SINT || v->sint < 0)
 		goto fail;
 	sz = (size_t)v->sint;
@@ -385,22 +395,113 @@ fail:
 
 
 /*
- * minimal main program
+ * main program
  */
 
 #include <stdio.h>
 #include <inttypes.h>
 #include <err.h>
+#include <errno.h>
+#include <stdlib.h>	/* realloc() */
 #include <fcntl.h>	/* open() */
 #include <unistd.h>	/* lseek() */
 #include <sys/mman.h>	/* mmap() */
 
-int main(int argc, char *argv[])
+const char *infile = NULL;
+
+/*
+ * This helper implements the standard backwards parsing strategy to read all
+ * cross-reference sections and trailer dictionaries, starting from the
+ * 'startxref' offset found at the very end of the input.
+ *
+ * Allocates and returns an array of HParsedTokens, each containing the result
+ * of a successful 'p_xref' parse. Sets the output parameter 'nxrefs' to the
+ * number of elements.
+ *
+ * A return value of NULL indicates an empty result.
+ */
+const HParsedToken **
+parse_xrefs(const char *input, size_t sz, size_t *nxrefs)
 {
 	HParseResult *res = NULL;
-	const char *infile = NULL;
+	const HParsedToken **xrefs = NULL;	/* empty result */
+	const HParsedToken *tok = NULL;
+	size_t n = 0;
+	size_t offset = 0;
+
+	// XXX try formulating this as a parser using h_seek()
+
+	/* search for the "startxref" section from the back of the file */
+	HParser *p = h_left(p_startxref, h_end_p());
+	for (size_t i = 0; i < sz; i++) {
+		res = h_parse(p, input + sz - i, i);
+		if (res != NULL)
+			break;
+	}
+	if (res == NULL) {
+		fprintf(stderr, "%s: startxref not found\n", infile);
+		goto end;
+	}
+	offset = H_INDEX_UINT(res->ast, 0);
+
+	for (;;) {
+		res = h_parse(p_xref, input + offset, sz - offset);
+		if (res == NULL) {
+			fprintf(stderr, "%s: error parsing xref section at "
+			    "position %zu (0x%zx)\n", infile, offset, offset);
+			break;
+		}
+
+		/* save this section in xrefs */
+		if (n >= SIZE_MAX / sizeof(HParsedToken *))
+			errc(1, EOVERFLOW, "overflow");
+		xrefs = realloc(xrefs, (n + 1) * sizeof(HParsedToken *));
+		if (xrefs == NULL)
+			err(1, "realloc");
+		xrefs[n++] = res->ast;
+
+		/* look up the next offset (to the previous xref section) */
+		tok = dictentry(H_INDEX_SEQ(res->ast, 1), "Prev");
+		if (tok == NULL)
+			break;
+		if (tok->token_type != TT_SINT) {
+			fprintf(stderr, "%s: /Prev not an integer\n", infile);
+			break;
+		}
+
+		/*
+		 * validate the new offset. we don't want to get caught in a
+		 * loop. the offsets should strictly decrease, unless the file
+		 * is a "linearized" PDF. in that case there should be exactly
+		 * two xref sections in the reverse order, so we allow the
+		 * first section to point forward.
+		 */
+		if (n > 1 && tok->sint >= offset) {
+			fprintf(stderr, "%s: /Prev pointer of xref section at "
+			    "%zu (0x%zx) points forward\n", infile, offset,
+			    offset);
+			break;
+		}
+
+		offset = (size_t)tok->sint;
+	}
+	// XXX debug
+	//fprintf(stderr, "%s: %zu xref sections parsed\n", infile, n);
+	//for (size_t i = 0; i < n; i++)
+	//	h_pprintln(stderr, xrefs[i]);
+
+end:
+	*nxrefs = n;
+	return xrefs;
+}
+
+int
+main(int argc, char *argv[])
+{
+	HParseResult *res = NULL;
+	const HParsedToken **xrefs;
 	const uint8_t *input;
-	size_t sz, startxref;
+	size_t sz, nxrefs;
 	int fd;
 
 	/* command line handling */
@@ -424,28 +525,8 @@ int main(int argc, char *argv[])
 	/* build parsers */
 	init_parser();
 
-	/* search for the "startxref" section from the back of the file */
-	HParser *p = h_left(p_startxref, h_end_p());
-	for (size_t i = 0; i < sz; i++) {
-		res = h_parse(p, input + sz - i, i);
-		if (res) break;
-	}
-	if (res == NULL) {
-		fprintf(stderr, "%s: startxref not found\n", infile);
-		return 1;
-	}
-	startxref = H_INDEX_UINT(res->ast, 0);
-
-	/* parse cross-references and trailer dictionary */
-	res = h_parse(p_xref, input + startxref, sz - startxref);
-	if (!res) {
-		fprintf(stderr, "%s: error parsing xref/trailer at "
-		    "position %zu (0x%zx)\n", infile, startxref, startxref);
-		// continue anyway...
-	}
-	// XXX debug
-	//h_pprintln(stderr, res->ast);
-	//return 0;
+	/* parse all cross-reference sections and trailer dictionaries */
+	xrefs = parse_xrefs(input, sz, &nxrefs);
 
 	/* run the main parser */
 	res = h_parse(p_pdf, input, sz);
